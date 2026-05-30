@@ -1,0 +1,30 @@
+[project]
+name = "seamless-sso-browser"
+version = "0.1.0"
+description = "Forge Kerberos tickets for Azure Seamless SSO and launch Firefox as the target user."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.13"
+dependencies = [
+    "impacket>=0.12.0",
+]
+
+[project.scripts]
+seamless-sso-browser = "seamless_sso_browser.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.11",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

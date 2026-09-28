@@ -257,6 +257,54 @@ class TestTgsFromCredentials:
         assert any("autologon" in s for s in spns)
         assert any("aadg" in s for s in spns)
 
+    @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
+    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos.getKerberosTGT")
+    def test_single_spn_no_merge(self, mock_get_tgt, mock_get_tgs, mock_save, tmp_path):
+        mock_get_tgt.return_value = (b"tgt", MagicMock(), MagicMock(), MagicMock())
+        mock_get_tgs.return_value = (b"tgs", MagicMock(), MagicMock(), MagicMock())
+        mock_save.side_effect = lambda tgs, old, new, path: make_dummy_ccache(
+            path, "HTTP/dummy"
+        )
+
+        result = tgs_from_credentials(
+            domain="test.local",
+            dc_ip="10.0.0.1",
+            username="admin",
+            work_dir=str(tmp_path),
+            password="pass",
+            spns=["HTTP/x.kerberos.okta.com"],
+        )
+
+        assert os.path.isfile(result)
+        assert mock_get_tgs.call_count == 1
+
+    @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
+    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos.getKerberosTGT")
+    def test_default_spns_requests_both(
+        self, mock_get_tgt, mock_get_tgs, mock_save, tmp_path
+    ):
+        mock_get_tgt.return_value = (b"tgt", MagicMock(), MagicMock(), MagicMock())
+        mock_get_tgs.return_value = (b"tgs", MagicMock(), MagicMock(), MagicMock())
+        mock_save.side_effect = lambda tgs, old, new, path: make_dummy_ccache(
+            path, "HTTP/dummy"
+        )
+
+        tgs_from_credentials(
+            domain="test.local",
+            dc_ip="10.0.0.1",
+            username="admin",
+            work_dir=str(tmp_path),
+            password="pass",
+            spns=None,
+        )
+
+        spns = [str(call[0][0]) for call in mock_get_tgs.call_args_list]
+        assert mock_get_tgs.call_count == 2
+        assert any("autologon" in s for s in spns)
+        assert any("aadg" in s for s in spns)
+
 
 class TestTgsFromTgt:
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
@@ -319,5 +367,43 @@ class TestTgsFromTgt:
         tgs_from_tgt(tgt_path, "test.local", "10.0.0.1", str(tmp_path))
 
         spns = [str(call[0][0]) for call in mock_get_tgs.call_args_list]
+        assert any("autologon" in s for s in spns)
+        assert any("aadg" in s for s in spns)
+
+    @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
+    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    def test_single_spn_no_merge(self, mock_get_tgs, mock_save, tmp_path):
+        tgt_path = str(tmp_path / "tgt.ccache")
+        make_dummy_ccache(tgt_path, "krbtgt/TEST.LOCAL@TEST.LOCAL")
+        mock_get_tgs.return_value = (b"tgs", MagicMock(), MagicMock(), MagicMock())
+        mock_save.side_effect = lambda tgs, old, new, path: make_dummy_ccache(
+            path, "HTTP/dummy"
+        )
+
+        result = tgs_from_tgt(
+            tgt_path, "test.local", "10.0.0.1", str(tmp_path),
+            spns=["HTTP/x.kerberos.okta.com"],
+        )
+
+        assert os.path.isfile(result)
+        assert mock_get_tgs.call_count == 1
+
+    @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
+    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    def test_default_spns_requests_both(self, mock_get_tgs, mock_save, tmp_path):
+        tgt_path = str(tmp_path / "tgt.ccache")
+        make_dummy_ccache(tgt_path, "krbtgt/TEST.LOCAL@TEST.LOCAL")
+        mock_get_tgs.return_value = (b"tgs", MagicMock(), MagicMock(), MagicMock())
+        mock_save.side_effect = lambda tgs, old, new, path: make_dummy_ccache(
+            path, "HTTP/dummy"
+        )
+
+        tgs_from_tgt(
+            tgt_path, "test.local", "10.0.0.1", str(tmp_path),
+            spns=None,
+        )
+
+        spns = [str(call[0][0]) for call in mock_get_tgs.call_args_list]
+        assert mock_get_tgs.call_count == 2
         assert any("autologon" in s for s in spns)
         assert any("aadg" in s for s in spns)

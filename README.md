@@ -1,12 +1,12 @@
 # seamless-sso-browser
 
-Forges Kerberos tickets for Azure Seamless SSO and drops you into a target user's browser session. Give it a hash, a password, a TGT -- whatever you've got. It gets the tickets sorted and launches Firefox already authenticated.
+Forges Kerberos tickets for Azure Seamless SSO and Okta Agentless Desktop SSO, then drops you into a target user's browser session. Give it a hash, a password, a TGT -- whatever you've got. It gets the tickets sorted and launches Firefox already authenticated.
 
 ## Prerequisites
 
 - Linux with GSSAPI libs (Kali works out of the box)
 - Firefox (`sudo apt install firefox-esr`)
-- Seamless SSO enabled on the target tenant
+- Seamless SSO (Azure) or Agentless Desktop SSO (Okta) enabled on the target tenant
 
 ## Usage
 
@@ -90,6 +90,21 @@ seamless-sso-browser \
   --ccache /path/to/combined.ccache
 ```
 
+### The tenant uses Okta, not Azure
+
+Same five paths, aimed at Okta's Agentless Desktop SSO (IWA) instead. Add `--idp okta` and your org subdomain with `--okta-org`. Okta authenticates against a single tenant SPN (`HTTP/<org>.kerberos.<domain>.com`), so you get one ticket and no merge step.
+
+```bash
+seamless-sso-browser \
+  --domain domain.local \
+  --idp okta --okta-org acme \
+  --user-sid S-1-5-21-XXXXXXXXXX-XXXXXXXXXX-XXXXXXXXXX-1234 \
+  --user jsmith \
+  --okta-svc-aes <OKTA_DSSO_SERVICE_ACCOUNT_AES_KEY>
+```
+
+Forgery is AES-only here -- Okta rejects RC4, so there's no NTLM flag for this path. The password, TGT, TGS, and ccache examples above all work the same once you add `--idp okta --okta-org`. For a non-default environment, set `--okta-domain` (`oktapreview`, `okta-emea`, `okta-gov`).
+
 ### Targeting something other than Outlook
 
 Default opens Outlook. Use `--target` to pick a different app:
@@ -101,7 +116,7 @@ seamless-sso-browser \
   --target sharepoint --tenant contoso
 ```
 
-Presets: `outlook` (default), `sharepoint` (needs `--tenant`), `teams`, `onedrive`, `admin`, `entra`, `azure`.
+Presets: `outlook` (default), `sharepoint` (needs `--tenant`), `teams`, `onedrive`, `admin`, `entra`, `azure`, `okta-dashboard` (needs `--okta-org`).
 
 You can also pass a raw URL: `--target https://custom-app.contoso.com`.
 
@@ -133,6 +148,15 @@ The tool always spoofs Edge on Windows 11 by default, override with `--useragent
 | `--user-sid` | Full user SID (required for silver ticket forgery) |
 | `--upn` | UPN for display only |
 | `--dc-ip` | Domain controller address |
+
+### Okta (Agentless Desktop SSO)
+
+| Flag | Description |
+|------|------------|
+| `--idp` | Identity provider, `azure` (default) or `okta` |
+| `--okta-org` | Okta org subdomain, e.g. `acme` (required for `--idp okta`, except TGS/ccache) |
+| `--okta-domain` | Okta environment: `okta` (default), `oktapreview`, `okta-emea`, `okta-gov` |
+| `--okta-svc-aes` | Okta DSSO service account AES key (silver ticket, AES-only) |
 
 ### Target and browser
 

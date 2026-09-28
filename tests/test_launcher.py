@@ -1,6 +1,7 @@
 import stat
+from unittest.mock import MagicMock, patch
 
-from seamless_sso_browser.launcher import cleanup, find_firefox
+from seamless_sso_browser.launcher import cleanup, find_firefox, launch_firefox
 
 
 class TestFindFirefox:
@@ -43,3 +44,47 @@ class TestCleanup:
 
     def test_skips_missing_paths_without_error(self, tmp_path):
         cleanup(str(tmp_path / "nope"), ccache_path=str(tmp_path / "also_nope"))
+
+
+class TestLaunchFirefoxEnv:
+    def _run(self, tmp_path, monkeypatch, verbose):
+        monkeypatch.delenv("KRB5_TRACE", raising=False)
+        monkeypatch.delenv("NSPR_LOG_MODULES", raising=False)
+        krb5 = tmp_path / "krb5.conf"
+        krb5.write_text("[libdefaults]\n")
+
+        captured = {}
+
+        def fake_popen(cmd, env=None, stderr=None):
+            captured["env"] = env
+            proc = MagicMock()
+            proc.wait.return_value = 0
+            return proc
+
+        with patch(
+            "seamless_sso_browser.launcher.subprocess.Popen", side_effect=fake_popen
+        ), patch("seamless_sso_browser.launcher.signal.signal"):
+            launch_firefox(
+                firefox_path="/usr/bin/firefox",
+                profile_dir=str(tmp_path / "profile"),
+                ccache_path=str(tmp_path / "x.ccache"),
+                krb5_conf_path=str(krb5),
+                target_url="https://example.com",
+                verbose=verbose,
+            )
+        return captured["env"]
+
+    def test_sets_kerberos_env_always(self, tmp_path, monkeypatch):
+        env = self._run(tmp_path, monkeypatch, verbose=False)
+        assert env["KRB5CCNAME"].endswith("x.ccache")
+        assert env["KRB5_CONFIG"].endswith("krb5.conf")
+
+    def test_verbose_enables_tracing(self, tmp_path, monkeypatch):
+        env = self._run(tmp_path, monkeypatch, verbose=True)
+        assert env["KRB5_TRACE"] == "/dev/stderr"
+        assert env["NSPR_LOG_MODULES"] == "negotiateauth:5"
+
+    def test_non_verbose_omits_tracing(self, tmp_path, monkeypatch):
+        env = self._run(tmp_path, monkeypatch, verbose=False)
+        assert "KRB5_TRACE" not in env
+        assert "NSPR_LOG_MODULES" not in env

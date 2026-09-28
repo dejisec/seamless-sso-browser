@@ -42,6 +42,9 @@ def launch_firefox(
     env = os.environ.copy()
     env["KRB5CCNAME"] = ccache_path
     env["KRB5_CONFIG"] = krb5_conf_path
+    if verbose:
+        env["KRB5_TRACE"] = "/dev/stderr"
+        env["NSPR_LOG_MODULES"] = "negotiateauth:5"
 
     cmd = [firefox_path, "--profile", profile_dir, "--no-remote", target_url]
 
@@ -55,9 +58,12 @@ def launch_firefox(
             for line in f:
                 print(f"    {line}", end="")
         print()
-        print("[*] For deep debugging, also set:")
+        print("[*] Tracing enabled for this run (Firefox stderr):")
         print("[*]   NSPR_LOG_MODULES=negotiateauth:5")
         print("[*]   KRB5_TRACE=/dev/stderr")
+        print("[*] Watch for a Kerberos ticket for the SSO SPN pulled from the")
+        print("[*] ccache; a raw NTLM token means the negotiation fell back (would")
+        print("[*] trigger Okta precheckFailure).")
 
     stderr_dest = None if verbose else subprocess.DEVNULL
     proc = subprocess.Popen(cmd, env=env, stderr=stderr_dest)

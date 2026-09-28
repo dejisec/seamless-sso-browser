@@ -8,7 +8,7 @@ from impacket.krb5.ccache import CCache
 from impacket.krb5.kerberosv5 import getKerberosTGS, getKerberosTGT
 from impacket.krb5.types import Principal
 
-from seamless_sso_browser.forger import AADG_SPN, AUTOLOGON_SPN, merge_ccaches
+from seamless_sso_browser.forger import merge_ccaches
 
 
 def load_ticket(value: str) -> CCache:
@@ -76,11 +76,21 @@ def _save_tgs_as_ccache(tgs, old_session_key, session_key, path: str) -> None:
 
 
 def _request_tgs_for_spns(
-    domain: str, dc_ip: str, tgt, cipher, session_key, work_dir: str
+    domain: str, dc_ip: str, tgt, cipher, session_key, work_dir: str,
+    spns: list[str] | None = None,
 ) -> str:
-    """Request TGS for both SSO SPNs and return path to merged ccache."""
+    """Request TGS for given SPNs and return path to ccache.
+
+    When *spns* is None, defaults to the two Azure AD SSO SPNs and merges them.
+    A single SPN returns the ccache directly (no merge).  Multiple SPNs are
+    merged and temps cleaned up.
+    """
+    if spns is None:
+        from seamless_sso_browser.forger import AADG_SPN, AUTOLOGON_SPN
+        spns = [AUTOLOGON_SPN, AADG_SPN]
+
     paths = []
-    for i, spn_str in enumerate([AUTOLOGON_SPN, AADG_SPN]):
+    for i, spn_str in enumerate(spns):
         server_name = Principal(
             spn_str, type=constants.PrincipalNameType.NT_SRV_INST.value
         )
@@ -91,6 +101,9 @@ def _request_tgs_for_spns(
         _save_tgs_as_ccache(tgs, old_key, new_key, path)
         paths.append(path)
 
+    if len(paths) == 1:
+        return paths[0]
+
     combined = os.path.join(work_dir, "combined.ccache")
     merge_ccaches(paths[0], paths[1], combined)
     os.unlink(paths[0])
@@ -98,14 +111,17 @@ def _request_tgs_for_spns(
     return combined
 
 
-def tgs_from_tgt(tgt_value: str, domain: str, dc_ip: str, work_dir: str) -> str:
+def tgs_from_tgt(
+    tgt_value: str, domain: str, dc_ip: str, work_dir: str,
+    spns: list[str] | None = None,
+) -> str:
     """Load a TGT from file/base64, request TGS for SSO SPNs from DC."""
     ccache = load_ticket(tgt_value)
     tgt_data = ccache.credentials[0].toTGT()
     return _request_tgs_for_spns(
         domain, dc_ip,
         tgt_data["KDC_REP"], tgt_data["cipher"], tgt_data["sessionKey"],
-        work_dir,
+        work_dir, spns=spns,
     )
 
 
@@ -117,6 +133,7 @@ def tgs_from_credentials(
     password: str | None = None,
     nthash: str | None = None,
     aes_key: str | None = None,
+    spns: list[str] | None = None,
 ) -> str:
     """Authenticate with user credentials, request TGS for SSO SPNs."""
     lmhash_bytes = b""
@@ -132,4 +149,6 @@ def tgs_from_credentials(
         aes_key, dc_ip,
     )
 
-    return _request_tgs_for_spns(domain, dc_ip, tgt, cipher, session_key, work_dir)
+    return _request_tgs_for_spns(
+        domain, dc_ip, tgt, cipher, session_key, work_dir, spns=spns,
+    )

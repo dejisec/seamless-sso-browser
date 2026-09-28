@@ -13,13 +13,15 @@ SSO_SPNS = "https://autologon.microsoftazuread-sso.com,https://aadg.windows.net.
 def create_firefox_profile(
     temp_dir: str,
     useragent: str | None = None,
+    trusted_uris: str | None = None,
 ) -> str:
     profile_dir = os.path.join(temp_dir, "profile")
     os.makedirs(profile_dir, exist_ok=True)
 
     ua = useragent or DEFAULT_USERAGENT
+    uris = trusted_uris if trusted_uris is not None else SSO_SPNS
     lines = [
-        f'user_pref("network.negotiate-auth.trusted-uris", "{SSO_SPNS}");',
+        f'user_pref("network.negotiate-auth.trusted-uris", "{uris}");',
         'user_pref("network.negotiate-auth.using-native-gsslib", true);',
         f'user_pref("general.useragent.override", "{ua}");',
     ]
@@ -31,18 +33,32 @@ def create_firefox_profile(
     return profile_dir
 
 
-def create_krb5_conf(temp_dir: str, domain: str) -> str:
+def _default_sso_hosts() -> list[str]:
+    """Negotiation hosts for the Azure SSO SPNs (derived from SSO_SPNS)."""
+    return [uri.split("://", 1)[-1] for uri in SSO_SPNS.split(",")]
+
+
+def create_krb5_conf(
+    temp_dir: str, domain: str, sso_hosts: list[str] | None = None
+) -> str:
     realm = domain.upper()
+    hosts = sso_hosts or _default_sso_hosts()
+    domain_realm = "\n".join(f"    {host} = {realm}" for host in hosts)
     content = f"""\
 [libdefaults]
     default_realm = {realm}
     dns_lookup_realm = false
     dns_lookup_kdc = false
+    rdns = false
+    dns_canonicalize_hostname = false
 
 [realms]
     {realm} = {{
         kdc = dummy
     }}
+
+[domain_realm]
+{domain_realm}
 """
     conf_path = os.path.join(temp_dir, "krb5.conf")
     with open(conf_path, "w") as f:

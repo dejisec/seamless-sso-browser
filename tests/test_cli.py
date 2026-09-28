@@ -1,6 +1,8 @@
+from unittest.mock import patch
+
 import pytest
 
-from seamless_sso_browser.cli import parse_args
+from seamless_sso_browser.cli import _derive_okta_spn, main, parse_args
 
 
 class TestForgeryMode:
@@ -228,6 +230,36 @@ class TestTargetPresets:
         with pytest.raises(SystemExit):
             parse_args(self.FORGE_ARGS + ["--target", "notarealpreset"])
 
+    def test_preset_okta_dashboard(self):
+        args = parse_args(
+            self.FORGE_ARGS + ["--target", "okta-dashboard", "--okta-org", "acme"]
+        )
+        assert args.target_url == "https://acme.okta.com"
+
+    def test_preset_okta_dashboard_without_org_errors(self):
+        with pytest.raises(SystemExit):
+            parse_args(self.FORGE_ARGS + ["--target", "okta-dashboard"])
+
+    @pytest.mark.parametrize(
+        "cell,expected_host",
+        [
+            ("okta", "acme.okta.com"),
+            ("oktapreview", "acme.oktapreview.com"),
+            ("okta-emea", "acme.okta-emea.com"),
+            ("okta-gov", "acme.okta-gov.com"),
+        ],
+    )
+    def test_okta_dashboard_honors_cell(self, cell, expected_host):
+        # okta-dashboard must follow --okta-domain, not hardcode .okta.com.
+        args = parse_args([
+            "--domain", "domain.local", "--idp", "okta",
+            "--okta-org", "acme", "--okta-domain", cell,
+            "--okta-svc-aes", "00" * 32,
+            "--user-sid", "S-1-5-21-111-222-333-1234", "--user", "admin",
+            "--target", "okta-dashboard",
+        ])
+        assert args.target_url == f"https://{expected_host}"
+
 
 class TestDefaults:
     FORGE_ARGS = [
@@ -247,3 +279,196 @@ class TestDefaults:
     def test_custom_useragent(self):
         args = parse_args(self.FORGE_ARGS + ["--useragent", "Custom/1.0"])
         assert args.useragent == "Custom/1.0"
+
+
+class TestIdpSelection:
+    def test_default_idp_is_azure(self):
+        args = parse_args(["--domain", "x", "--ccache", "y"])
+        assert args.idp == "azure"
+
+    def test_idp_azure_explicit(self):
+        args = parse_args(["--domain", "x", "--idp", "azure", "--ccache", "y"])
+        assert args.idp == "azure"
+
+    def test_idp_okta(self):
+        args = parse_args([
+            "--domain", "x", "--idp", "okta",
+            "--okta-org", "acme", "--ccache", "y",
+        ])
+        assert args.idp == "okta"
+
+    def test_okta_org_stored(self):
+        args = parse_args([
+            "--domain", "x", "--idp", "okta",
+            "--okta-org", "acme", "--ccache", "y",
+        ])
+        assert args.okta_org == "acme"
+
+    def test_okta_domain_default(self):
+        args = parse_args([
+            "--domain", "x", "--idp", "okta",
+            "--okta-org", "acme", "--ccache", "y",
+        ])
+        assert args.okta_domain == "okta"
+
+    def test_okta_domain_explicit(self):
+        args = parse_args([
+            "--domain", "x", "--idp", "okta",
+            "--okta-org", "acme", "--okta-domain", "oktapreview",
+            "--ccache", "y",
+        ])
+        assert args.okta_domain == "oktapreview"
+
+
+class TestOktaSpnDerivation:
+    def test_default_domain(self):
+        assert _derive_okta_spn("acme", "okta") == "HTTP/acme.kerberos.okta.com"
+
+    def test_oktapreview_domain(self):
+        assert _derive_okta_spn("acme", "oktapreview") == "HTTP/acme.kerberos.oktapreview.com"
+
+    def test_okta_emea_domain(self):
+        assert _derive_okta_spn("acme", "okta-emea") == "HTTP/acme.kerberos.okta-emea.com"
+
+    def test_okta_gov_domain(self):
+        # The cell label is bare ("okta-gov"); the SPN carries the full base
+        # domain (okta-gov.com) with no doubled ".com".
+        assert _derive_okta_spn("acme", "okta-gov") == "HTTP/acme.kerberos.okta-gov.com"
+
+
+class TestOktaValidation:
+    def test_okta_svc_aes_without_idp_okta_errors(self):
+        with pytest.raises(SystemExit):
+            parse_args([
+                "--domain", "d", "--okta-svc-aes", "a" * 64,
+                "--user", "u", "--user-sid", "S-1-5-21-1-2-3-4",
+            ])
+
+    def test_okta_domain_without_idp_okta_errors(self):
+        with pytest.raises(SystemExit):
+            parse_args([
+                "--domain", "d", "--okta-domain", "oktapreview",
+                "--ccache", "x",
+            ])
+
+    def test_azure_ntlm_with_idp_okta_errors(self):
+        with pytest.raises(SystemExit):
+            parse_args([
+                "--domain", "d", "--idp", "okta", "--okta-org", "acme",
+                "--adssoacc-ntlm", "a" * 32, "--user", "u",
+                "--user-sid", "S-1-5-21-1-2-3-4",
+            ])
+
+    def test_azure_aes_with_idp_okta_errors(self):
+        with pytest.raises(SystemExit):
+            parse_args([
+                "--domain", "d", "--idp", "okta", "--okta-org", "acme",
+                "--adssoacc-aes", "a" * 64, "--user", "u",
+                "--user-sid", "S-1-5-21-1-2-3-4",
+            ])
+
+    def test_idp_okta_without_okta_org_errors(self):
+        with pytest.raises(SystemExit):
+            parse_args([
+                "--domain", "d", "--idp", "okta", "--okta-svc-aes", "a" * 64,
+                "--user", "u", "--user-sid", "S-1-5-21-1-2-3-4",
+            ])
+
+    def test_idp_okta_ccache_without_okta_org_ok(self):
+        args = parse_args([
+            "--domain", "d", "--idp", "okta", "--ccache", "x",
+        ])
+        assert args.idp == "okta"
+
+    def test_idp_okta_tgs_without_okta_org_ok(self):
+        args = parse_args([
+            "--domain", "d", "--idp", "okta", "--tgs", "x",
+        ])
+        assert args.idp == "okta"
+
+    def test_okta_svc_aes_conflicts_with_password(self):
+        with pytest.raises(SystemExit):
+            parse_args([
+                "--domain", "d", "--idp", "okta", "--okta-org", "acme",
+                "--okta-svc-aes", "a" * 64, "--password", "pass",
+                "--user", "u", "--dc-ip", "1.2.3.4",
+            ])
+
+    def test_okta_forgery_valid(self):
+        args = parse_args([
+            "--domain", "d", "--idp", "okta", "--okta-org", "acme",
+            "--okta-svc-aes", "a" * 64, "--user", "u",
+            "--user-sid", "S-1-5-21-1-2-3-4",
+        ])
+        assert args.okta_svc_aes == "a" * 64
+
+
+class TestOpsecMessages:
+    """Test that main() output messages use IDP-appropriate terminology."""
+
+    def _run_main_with_argv(self, argv, capsys, parse_user_sid_ret=None):
+        """Run main() with patched externals, return captured stdout."""
+        with (
+            patch("seamless_sso_browser.cli.find_firefox", return_value="/usr/bin/firefox"),
+            patch("seamless_sso_browser.cli.forge_tickets", return_value="/tmp/combined.ccache"),
+            patch("seamless_sso_browser.cli.create_firefox_profile", return_value="/tmp/profile"),
+            patch("seamless_sso_browser.cli.create_krb5_conf", return_value="/tmp/krb5.conf"),
+            patch("seamless_sso_browser.cli.launch_firefox"),
+            patch("seamless_sso_browser.cli.cleanup"),
+            patch(
+                "seamless_sso_browser.cli.tgs_from_credentials",
+                return_value="/tmp/creds.ccache",
+            ),
+            patch("seamless_sso_browser.cli.tgs_from_tgt", return_value="/tmp/tgt.ccache"),
+            patch("sys.argv", ["seamless-sso-browser"] + argv),
+        ):
+            if parse_user_sid_ret:
+                with patch(
+                    "seamless_sso_browser.cli.parse_user_sid",
+                    return_value=parse_user_sid_ret,
+                ):
+                    main()
+            else:
+                main()
+        return capsys.readouterr().out
+
+    def test_okta_forgery_messages(self, capsys):
+        output = self._run_main_with_argv(
+            [
+                "--domain", "d.local", "--idp", "okta", "--okta-org", "acme",
+                "--okta-svc-aes", "a" * 64, "--user", "admin",
+                "--user-sid", "S-1-5-21-1-2-3-4", "--no-cleanup",
+            ],
+            capsys,
+            parse_user_sid_ret=("S-1-5-21-1-2-3", 4),
+        )
+        assert "Okta DSSO service account AES key" in output
+        assert "Okta Agentless Desktop SSO" in output
+        assert "AZUREADSSOACC$" not in output
+        assert "both SSO SPNs" not in output
+
+    def test_azure_forgery_messages_unchanged(self, capsys):
+        output = self._run_main_with_argv(
+            [
+                "--domain", "d.local",
+                "--adssoacc-ntlm", "a" * 32, "--user", "admin",
+                "--user-sid", "S-1-5-21-1-2-3-4", "--no-cleanup",
+            ],
+            capsys,
+            parse_user_sid_ret=("S-1-5-21-1-2-3", 4),
+        )
+        assert "AZUREADSSOACC$" in output
+        assert "both SSO SPNs" not in output  # Azure forgery prints individual SPNs and merge
+        assert "Okta" not in output
+
+    def test_okta_credential_messages(self, capsys):
+        output = self._run_main_with_argv(
+            [
+                "--domain", "d.local", "--idp", "okta", "--okta-org", "acme",
+                "--dc-ip", "10.0.0.1", "--user", "admin",
+                "--password", "Pass1", "--no-cleanup",
+            ],
+            capsys,
+        )
+        assert "Okta SSO SPN" in output
+        assert "both SSO SPNs" not in output

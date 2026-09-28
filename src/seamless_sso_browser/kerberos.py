@@ -1,14 +1,34 @@
 """DC-interactive Kerberos operations and ticket format parsing."""
 
 import base64
+import datetime
 import os
+import random
 
 from impacket.krb5 import constants
+from impacket.krb5.asn1 import (
+    AP_REQ,
+    AS_REP,
+    TGS_REP,
+    TGS_REQ,
+    Authenticator,
+    EncTGSRepPart,
+    seq_set,
+    seq_set_iter,
+)
 from impacket.krb5.ccache import CCache
-from impacket.krb5.kerberosv5 import getKerberosTGS, getKerberosTGT
-from impacket.krb5.types import Principal
+from impacket.krb5.crypto import Key
+from impacket.krb5.kerberosv5 import getKerberosTGT, sendReceive
+from impacket.krb5.types import KerberosTime, Principal, Ticket
+from pyasn1.codec.der import decoder, encoder
+from pyasn1.type.univ import noValue
 
 from seamless_sso_browser.forger import merge_ccaches
+
+try:
+    _rand = random.SystemRandom()
+except NotImplementedError:
+    _rand = random
 
 
 def load_ticket(value: str) -> CCache:
@@ -68,6 +88,101 @@ def _parse_ntlm_hash(hash_str: str) -> tuple[bytes, bytes]:
     return b"", bytes.fromhex(hash_str)
 
 
+def _get_tgs(server_name, domain, kdc_host, tgt, cipher, session_key):
+    """Request a TGS without the canonicalize KDC option.
+
+    Impacket's getKerberosTGS sets canonicalize, which causes the KDC to
+    issue cross-realm referrals for SPNs whose hostname belongs to a
+    different DNS domain (e.g. the Azure SSO SPNs). It then follows the
+    referral back to the same kdcHost, which fails with
+    KDC_ERR_WRONG_REALM.
+    """
+    try:
+        decoded_tgt = decoder.decode(tgt, asn1Spec=AS_REP())[0]
+    except Exception:
+        decoded_tgt = decoder.decode(tgt, asn1Spec=TGS_REP())[0]
+
+    domain = domain.upper()
+
+    ticket = Ticket()
+    ticket.from_asn1(decoded_tgt['ticket'])
+
+    ap_req = AP_REQ()
+    ap_req['pvno'] = 5
+    ap_req['msg-type'] = int(constants.ApplicationTagNumbers.AP_REQ.value)
+    ap_req['ap-options'] = constants.encodeFlags([])
+    seq_set(ap_req, 'ticket', ticket.to_asn1)
+
+    authenticator = Authenticator()
+    authenticator['authenticator-vno'] = 5
+    authenticator['crealm'] = decoded_tgt['crealm'].asOctets()
+
+    client_name = Principal()
+    client_name.from_asn1(decoded_tgt, 'crealm', 'cname')
+    seq_set(authenticator, 'cname', client_name.components_to_asn1)
+
+    now = datetime.datetime.now(datetime.UTC)
+    authenticator['cusec'] = now.microsecond
+    authenticator['ctime'] = KerberosTime.to_asn1(now)
+
+    encoded_authenticator = encoder.encode(authenticator)
+    encrypted_authenticator = cipher.encrypt(
+        session_key, 7, encoded_authenticator, None
+    )
+
+    ap_req['authenticator'] = noValue
+    ap_req['authenticator']['etype'] = cipher.enctype
+    ap_req['authenticator']['cipher'] = encrypted_authenticator
+
+    encoded_ap_req = encoder.encode(ap_req)
+
+    tgs_req = TGS_REQ()
+    tgs_req['pvno'] = 5
+    tgs_req['msg-type'] = int(constants.ApplicationTagNumbers.TGS_REQ.value)
+    tgs_req['padata'] = noValue
+    tgs_req['padata'][0] = noValue
+    tgs_req['padata'][0]['padata-type'] = int(
+        constants.PreAuthenticationDataTypes.PA_TGS_REQ.value
+    )
+    tgs_req['padata'][0]['padata-value'] = encoded_ap_req
+
+    req_body = seq_set(tgs_req, 'req-body')
+
+    opts = [
+        constants.KDCOptions.forwardable.value,
+        constants.KDCOptions.renewable.value,
+        constants.KDCOptions.renewable_ok.value,
+    ]
+    req_body['kdc-options'] = constants.encodeFlags(opts)
+    seq_set(req_body, 'sname', server_name.components_to_asn1)
+    req_body['realm'] = domain
+
+    till = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)
+    req_body['till'] = KerberosTime.to_asn1(till)
+    req_body['nonce'] = _rand.getrandbits(31)
+    seq_set_iter(req_body, 'etype', (
+        int(constants.EncryptionTypes.rc4_hmac.value),
+        int(constants.EncryptionTypes.des3_cbc_sha1_kd.value),
+        int(constants.EncryptionTypes.des_cbc_md5.value),
+        int(cipher.enctype),
+    ))
+
+    message = encoder.encode(tgs_req)
+    r = sendReceive(message, domain, kdc_host)
+
+    tgs = decoder.decode(r, asn1Spec=TGS_REP())[0]
+    cipher_text = tgs['enc-part']['cipher']
+    plain_text = cipher.decrypt(session_key, 8, cipher_text)
+    enc_part = decoder.decode(plain_text, asn1Spec=EncTGSRepPart())[0]
+
+    new_session_key = Key(
+        enc_part['key']['keytype'],
+        enc_part['key']['keyvalue'].asOctets(),
+    )
+
+    return r, cipher, session_key, new_session_key
+
+
 def _save_tgs_as_ccache(tgs, old_session_key, session_key, path: str) -> None:
     """Save a TGS response as a ccache file."""
     ccache = CCache()
@@ -94,7 +209,7 @@ def _request_tgs_for_spns(
         server_name = Principal(
             spn_str, type=constants.PrincipalNameType.NT_SRV_INST.value
         )
-        tgs, _, old_key, new_key = getKerberosTGS(
+        tgs, _, old_key, new_key = _get_tgs(
             server_name, domain, dc_ip, tgt, cipher, session_key
         )
         path = os.path.join(work_dir, f"tgs_{i}.ccache")

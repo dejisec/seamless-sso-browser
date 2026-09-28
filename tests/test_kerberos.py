@@ -146,7 +146,7 @@ class TestCcacheFromTgs:
 
 class TestTgsFromCredentials:
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
-    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos._get_tgs")
     @patch("seamless_sso_browser.kerberos.getKerberosTGT")
     def test_password_auth(self, mock_get_tgt, mock_get_tgs, mock_save, tmp_path):
         mock_get_tgt.return_value = (b"tgt", MagicMock(), MagicMock(), MagicMock())
@@ -168,7 +168,7 @@ class TestTgsFromCredentials:
         assert mock_get_tgs.call_count == 2
 
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
-    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos._get_tgs")
     @patch("seamless_sso_browser.kerberos.getKerberosTGT")
     def test_ntlm_hash_auth(self, mock_get_tgt, mock_get_tgs, mock_save, tmp_path):
         mock_get_tgt.return_value = (b"tgt", MagicMock(), MagicMock(), MagicMock())
@@ -191,7 +191,7 @@ class TestTgsFromCredentials:
         assert call_args[0][1] == ""
 
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
-    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos._get_tgs")
     @patch("seamless_sso_browser.kerberos.getKerberosTGT")
     def test_ntlm_hash_with_lm(self, mock_get_tgt, mock_get_tgs, mock_save, tmp_path):
         mock_get_tgt.return_value = (b"tgt", MagicMock(), MagicMock(), MagicMock())
@@ -214,7 +214,7 @@ class TestTgsFromCredentials:
         assert call_args[0][4] == bytes.fromhex("bb" * 16)  # nthash
 
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
-    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos._get_tgs")
     @patch("seamless_sso_browser.kerberos.getKerberosTGT")
     def test_aes_key_auth(self, mock_get_tgt, mock_get_tgs, mock_save, tmp_path):
         mock_get_tgt.return_value = (b"tgt", MagicMock(), MagicMock(), MagicMock())
@@ -236,7 +236,7 @@ class TestTgsFromCredentials:
         assert call_args[0][5] == "cc" * 32  # aesKey
 
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
-    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos._get_tgs")
     @patch("seamless_sso_browser.kerberos.getKerberosTGT")
     def test_requests_both_spns(self, mock_get_tgt, mock_get_tgs, mock_save, tmp_path):
         mock_get_tgt.return_value = (b"tgt", MagicMock(), MagicMock(), MagicMock())
@@ -258,7 +258,7 @@ class TestTgsFromCredentials:
         assert any("aadg" in s for s in spns)
 
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
-    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos._get_tgs")
     @patch("seamless_sso_browser.kerberos.getKerberosTGT")
     def test_single_spn_no_merge(self, mock_get_tgt, mock_get_tgs, mock_save, tmp_path):
         mock_get_tgt.return_value = (b"tgt", MagicMock(), MagicMock(), MagicMock())
@@ -280,7 +280,7 @@ class TestTgsFromCredentials:
         assert mock_get_tgs.call_count == 1
 
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
-    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos._get_tgs")
     @patch("seamless_sso_browser.kerberos.getKerberosTGT")
     def test_default_spns_requests_both(
         self, mock_get_tgt, mock_get_tgs, mock_save, tmp_path
@@ -308,7 +308,7 @@ class TestTgsFromCredentials:
 
 class TestTgsFromTgt:
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
-    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos._get_tgs")
     def test_from_ccache_file(self, mock_get_tgs, mock_save, tmp_path):
         tgt_path = str(tmp_path / "tgt.ccache")
         make_dummy_ccache(tgt_path, "krbtgt/TEST.LOCAL@TEST.LOCAL")
@@ -323,7 +323,7 @@ class TestTgsFromTgt:
         assert mock_get_tgs.call_count == 2
 
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
-    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos._get_tgs")
     def test_from_base64(self, mock_get_tgs, mock_save, tmp_path):
         tgt_path = str(tmp_path / "tgt.ccache")
         make_dummy_ccache(tgt_path, "krbtgt/TEST.LOCAL@TEST.LOCAL")
@@ -339,7 +339,7 @@ class TestTgsFromTgt:
         assert os.path.isfile(result)
 
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
-    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos._get_tgs")
     def test_from_kirbi_file(self, mock_get_tgs, mock_save, tmp_path):
         tgt_ccache = str(tmp_path / "tgt.ccache")
         tgt_kirbi = str(tmp_path / "tgt.kirbi")
@@ -355,7 +355,7 @@ class TestTgsFromTgt:
         assert os.path.isfile(result)
 
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
-    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos._get_tgs")
     def test_requests_both_spns(self, mock_get_tgs, mock_save, tmp_path):
         tgt_path = str(tmp_path / "tgt.ccache")
         make_dummy_ccache(tgt_path, "krbtgt/TEST.LOCAL@TEST.LOCAL")
@@ -371,7 +371,7 @@ class TestTgsFromTgt:
         assert any("aadg" in s for s in spns)
 
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
-    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos._get_tgs")
     def test_single_spn_no_merge(self, mock_get_tgs, mock_save, tmp_path):
         tgt_path = str(tmp_path / "tgt.ccache")
         make_dummy_ccache(tgt_path, "krbtgt/TEST.LOCAL@TEST.LOCAL")
@@ -389,7 +389,7 @@ class TestTgsFromTgt:
         assert mock_get_tgs.call_count == 1
 
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
-    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos._get_tgs")
     def test_default_spns_requests_both(self, mock_get_tgs, mock_save, tmp_path):
         tgt_path = str(tmp_path / "tgt.ccache")
         make_dummy_ccache(tgt_path, "krbtgt/TEST.LOCAL@TEST.LOCAL")

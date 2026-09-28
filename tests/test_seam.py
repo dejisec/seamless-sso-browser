@@ -22,7 +22,7 @@ Covers the CLI-to-module boundaries with real objects on both sides:
     the valid combinations and rejects the invalid ones.
 
 Mocked only at the network/crypto boundary:
-  _forge_single_ticket (impacket ticketer), getKerberosTGT, getKerberosTGS.
+  _forge_single_ticket (impacket ticketer), getKerberosTGT, _get_tgs.
 Process-level calls also mocked: find_firefox, launch_firefox.
 tempfile.mkdtemp is patched in main() wiring tests to control the working
 directory so user.js can be inspected after the run.
@@ -112,12 +112,12 @@ class TestSeamDeriveOktaSpnIntoForgeTickets:
 # ---------------------------------------------------------------------------
 
 class TestSeamDeriveOktaSpnIntoTgsFromTgt:
-    """SPN from _derive_okta_spn propagates through tgs_from_tgt to getKerberosTGS."""
+    """SPN from _derive_okta_spn propagates through tgs_from_tgt to _get_tgs."""
 
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
-    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos._get_tgs")
     def test_single_okta_spn_issues_one_tgs_request(self, mock_get_tgs, mock_save, tmp_path):
-        """tgs_from_tgt with the derived Okta SPN calls getKerberosTGS exactly once."""
+        """tgs_from_tgt with the derived Okta SPN calls _get_tgs exactly once."""
         tgt_path = str(tmp_path / "tgt.ccache")
         make_dummy_ccache(tgt_path, "krbtgt/TEST.LOCAL@TEST.LOCAL")
         mock_get_tgs.return_value = (b"tgs", MagicMock(), MagicMock(), MagicMock())
@@ -134,7 +134,7 @@ class TestSeamDeriveOktaSpnIntoTgsFromTgt:
         assert os.path.isfile(result)
 
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
-    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos._get_tgs")
     def test_azure_none_issues_two_tgs_requests(self, mock_get_tgs, mock_save, tmp_path):
         """tgs_from_tgt with spns=None requests TGS for both Azure SSO SPNs."""
         tgt_path = str(tmp_path / "tgt.ccache")
@@ -155,15 +155,15 @@ class TestSeamDeriveOktaSpnIntoTgsFromTgt:
 # ---------------------------------------------------------------------------
 
 class TestSeamDeriveOktaSpnIntoTgsFromCredentials:
-    """SPN from _derive_okta_spn propagates through tgs_from_credentials to getKerberosTGS."""
+    """SPN from _derive_okta_spn propagates through tgs_from_credentials to _get_tgs."""
 
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
-    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos._get_tgs")
     @patch("seamless_sso_browser.kerberos.getKerberosTGT")
     def test_single_okta_spn_issues_one_tgs_request(
         self, mock_get_tgt, mock_get_tgs, mock_save, tmp_path
     ):
-        """tgs_from_credentials with the derived Okta SPN calls getKerberosTGS exactly once."""
+        """tgs_from_credentials with the derived Okta SPN calls _get_tgs exactly once."""
         mock_get_tgt.return_value = (b"tgt", MagicMock(), MagicMock(), MagicMock())
         mock_get_tgs.return_value = (b"tgs", MagicMock(), MagicMock(), MagicMock())
         mock_save.side_effect = _save_tgs_side_effect
@@ -184,7 +184,7 @@ class TestSeamDeriveOktaSpnIntoTgsFromCredentials:
         assert os.path.isfile(result)
 
     @patch("seamless_sso_browser.kerberos._save_tgs_as_ccache")
-    @patch("seamless_sso_browser.kerberos.getKerberosTGS")
+    @patch("seamless_sso_browser.kerberos._get_tgs")
     @patch("seamless_sso_browser.kerberos.getKerberosTGT")
     def test_azure_none_issues_two_tgs_requests(
         self, mock_get_tgt, mock_get_tgs, mock_save, tmp_path

@@ -1,26 +1,41 @@
 """Firefox launch, environment setup, and cleanup."""
 
+import errno
 import os
 import shutil
 import signal
 import subprocess
-import sys
+
+from seamless_sso_browser.errors import (
+    FIREFOX_REASON_EXEC_FORMAT,
+    FIREFOX_REASON_MISSING,
+    FIREFOX_REASON_NOT_EXECUTABLE,
+    FIREFOX_REASON_OTHER,
+    FIREFOX_REASON_PERMISSION,
+    IDP_AZURE,
+    IDP_OKTA,
+    LocalEnvironmentError,
+    firefox_launch_message,
+)
 
 
 def find_firefox(firefox_path: str | None) -> str:
     if firefox_path:
         if not os.path.isfile(firefox_path):
-            print(f"Error: Firefox not found at {firefox_path}", file=sys.stderr)
-            sys.exit(1)
+            raise LocalEnvironmentError(f"Firefox not found at {firefox_path}")
+        if not os.access(firefox_path, os.X_OK):
+            raise LocalEnvironmentError(
+                firefox_launch_message(firefox_path, reason=FIREFOX_REASON_NOT_EXECUTABLE)
+            )
         return firefox_path
 
+    # No executable check after the PATH lookup: shutil.which already tests
+    # os.access(fn, os.F_OK | os.X_OK), so one here could never fire.
     found = shutil.which("firefox") or shutil.which("firefox-esr")
     if not found:
-        print(
-            "Error: Firefox not found on PATH.\nInstall with: sudo apt install firefox-esr",
-            file=sys.stderr,
+        raise LocalEnvironmentError(
+            "Firefox not found on PATH.\nInstall with: sudo apt install firefox-esr"
         )
-        sys.exit(1)
     return found
 
 
@@ -31,6 +46,22 @@ def cleanup(temp_dir: str, ccache_path: str | None = None) -> None:
         os.unlink(ccache_path)
 
 
+_LAUNCH_REASONS_BY_ERRNO = {
+    errno.ENOENT: FIREFOX_REASON_MISSING,
+    errno.ENOEXEC: FIREFOX_REASON_EXEC_FORMAT,
+    errno.EACCES: FIREFOX_REASON_PERMISSION,
+    errno.EPERM: FIREFOX_REASON_PERMISSION,
+}
+
+
+def _launch_failure_reason(err: OSError) -> str:
+    """Map an exec-time OSError to the reason firefox_launch_message renders."""
+    # err.errno, never err.strerror: no OS-provided text reaches a user-facing message.
+    # .get cannot raise, so an unmapped errno -- including None -- still gets a reason
+    # rather than a traceback in the middle of error handling.
+    return _LAUNCH_REASONS_BY_ERRNO.get(err.errno, FIREFOX_REASON_OTHER)
+
+
 def launch_firefox(
     firefox_path: str,
     profile_dir: str,
@@ -38,6 +69,7 @@ def launch_firefox(
     krb5_conf_path: str,
     target_url: str,
     verbose: bool = False,
+    idp: str = IDP_AZURE,
 ) -> None:
     env = os.environ.copy()
     env["KRB5CCNAME"] = ccache_path
@@ -62,11 +94,22 @@ def launch_firefox(
         print("[*]   NSPR_LOG_MODULES=negotiateauth:5")
         print("[*]   KRB5_TRACE=/dev/stderr")
         print("[*] Watch for a Kerberos ticket for the SSO SPN pulled from the")
-        print("[*] ccache; a raw NTLM token means the negotiation fell back (would")
-        print("[*] trigger Okta precheckFailure).")
+        print("[*] ccache; a raw NTLM token means the negotiation fell back")
+        if idp == IDP_OKTA:
+            print("[*] (which would trigger Okta precheckFailure).")
+        else:
+            print("[*] (so Seamless SSO did not fire).")
 
     stderr_dest = None if verbose else subprocess.DEVNULL
-    proc = subprocess.Popen(cmd, env=env, stderr=stderr_dest)
+    # The try body is this Popen call alone, and that scoping is the point: KdcUnreachableError
+    # is an OSError, so a wider body could catch an error raised elsewhere in this project and
+    # relabel it as a failure to launch Firefox.
+    try:
+        proc = subprocess.Popen(cmd, env=env, stderr=stderr_dest)
+    except OSError as err:
+        raise LocalEnvironmentError(
+            firefox_launch_message(firefox_path, reason=_launch_failure_reason(err))
+        ) from err
 
     def _signal_handler(signum, frame):
         proc.terminate()

@@ -92,7 +92,7 @@ seamless-sso-browser \
 
 ### The tenant uses Okta, not Azure
 
-Same five paths, aimed at Okta's Agentless Desktop SSO (IWA) instead. Add `--idp okta` and your org subdomain with `--okta-org`. Okta authenticates against a single tenant SPN (`HTTP/<org>.kerberos.<domain>.com`), so you get one ticket and no merge step.
+Same five paths, aimed at Okta's Agentless Desktop SSO (IWA) instead. Add `--idp okta` and your org subdomain with `--okta-org`. Okta authenticates against a single tenant SPN, `HTTP/<org>.kerberos.<base-domain>`, so you get one ticket and no merge step. The base domain comes from `--okta-domain`: `okta.com`, `oktapreview.com`, `okta-emea.com`, or `okta-gov.com`.
 
 ```bash
 seamless-sso-browser \
@@ -105,6 +105,8 @@ seamless-sso-browser \
 
 Forgery is AES-only here -- Okta rejects RC4, so there's no NTLM flag for this path. The password, TGT, TGS, and ccache examples above all work the same once you add `--idp okta --okta-org`. For a non-default environment, set `--okta-domain` (`oktapreview`, `okta-emea`, `okta-gov`).
 
+You can leave `--okta-org` out in `--tgs` and `--ccache` mode. The tool reads the Okta host out of the ticket instead, from the first credential that carries an `HTTP/<org>.kerberos.<base-domain>` service principal.
+
 ### Targeting something other than Outlook
 
 Default opens Outlook. Use `--target` to pick a different app:
@@ -116,7 +118,7 @@ seamless-sso-browser \
   --target sharepoint --tenant contoso
 ```
 
-Presets: `outlook` (default), `sharepoint` (needs `--tenant`), `teams`, `onedrive`, `admin`, `entra`, `azure`, `okta-dashboard` (needs `--okta-org`).
+Presets: `outlook` (default), `sharepoint` (needs `--tenant`), `teams`, `onedrive`, `admin`, `entra`, `azure`, `okta-dashboard` (needs `--idp okta` and `--okta-org`).
 
 You can also pass a raw URL: `--target https://custom-app.contoso.com`.
 
@@ -132,6 +134,7 @@ The tool always spoofs Edge on Windows 11 by default, override with `--useragent
 |------|------------|
 | `--adssoacc-ntlm` | AZUREADSSOACC$ NTLM hash (silver ticket, no DC) |
 | `--adssoacc-aes` | AZUREADSSOACC$ AES key (silver ticket, no DC) |
+| `--okta-svc-aes` | Okta DSSO service account AES key (silver ticket, AES-only, needs `--idp okta`) |
 | `--password` | User's password (needs DC) |
 | `--user-password-hash` | User's NTLM hash, `[LMHASH:]NTHASH` (needs DC) |
 | `--user-aes-key` | User's AES key (needs DC) |
@@ -154,7 +157,7 @@ The tool always spoofs Edge on Windows 11 by default, override with `--useragent
 | Flag | Description |
 |------|------------|
 | `--idp` | Identity provider, `azure` (default) or `okta` |
-| `--okta-org` | Okta org subdomain, e.g. `acme` (required for `--idp okta`, except TGS/ccache) |
+| `--okta-org` | Okta org subdomain, e.g. `acme` (needs `--idp okta`; required except in `--tgs`/`--ccache` mode, where the host comes from the ticket) |
 | `--okta-domain` | Okta environment: `okta` (default), `oktapreview`, `okta-emea`, `okta-gov` |
 | `--okta-svc-aes` | Okta DSSO service account AES key (silver ticket, AES-only) |
 
@@ -167,13 +170,15 @@ The tool always spoofs Edge on Windows 11 by default, override with `--useragent
 | `--useragent` | Custom user-agent (default: Edge on Windows 11) |
 | `--firefox-path` | Path to Firefox binary |
 | `--no-cleanup` | Keep temp files after exit |
-| `--verbose` | Print ccache path, krb5.conf, and the Firefox command |
+| `--verbose` | Print ccache path, krb5.conf, and the Firefox command, plus the traceback after an error |
 
 ## Troubleshooting
 
 Run with `--verbose --no-cleanup` first. That prints the ccache path, krb5.conf contents, and the exact Firefox command so you can poke at things manually.
 
-If SPNEGO negotiation isn't happening, set these and relaunch Firefox from the same shell:
+If SPNEGO negotiation isn't happening, `--verbose` already has most of the tracing on. It sets `KRB5_TRACE=/dev/stderr` and `NSPR_LOG_MODULES=negotiateauth:5` for the Firefox child and leaves the child's stderr on your terminal, so both traces scroll past while Firefox runs. Without `--verbose`, Firefox's stderr goes to `/dev/null`.
+
+`NSPR_LOG_FILE` is not one of them, so the SPNEGO log only ever reaches the terminal. Export all three yourself to put it in a file, or to relaunch Firefox by hand against a profile `--no-cleanup` kept:
 
 ```bash
 export NSPR_LOG_MODULES=negotiateauth:5
@@ -181,7 +186,17 @@ export NSPR_LOG_FILE=/tmp/firefox_spnego.log
 export KRB5_TRACE=/dev/stderr
 ```
 
-Usual suspects: clock skew over 5 minutes, Firefox not picking up the ccache (check `KRB5CCNAME`), or Conditional Access blocking the session even though the tickets are valid.
+A hand relaunch also needs the `KRB5CCNAME` and `KRB5_CONFIG` values `--verbose` printed before the launch.
+
+Usual suspects: clock skew, Firefox not picking up the ccache (check `KRB5CCNAME`), or Conditional Access.
+
+Clock skew comes back from the KDC as `KRB_AP_ERR_SKEW`, and the tool exits 5. The error line says the skew between this host and the DC is over 5 minutes; synchronize the clock and retry.
+
+Conditional Access is not a Kerberos error, and this tool never sees it. The tickets are valid, SPNEGO succeeds, Firefox launches, and the block shows up in the browser, so the exit code is 0.
+
+`KDC_ERR_S_PRINCIPAL_UNKNOWN` is another exit 5. It means the KDC has no record of the SSO service principal the tool asked for, so either SSO was never turned on for this tenant or org, or the name is wrong. On Azure, check that Seamless SSO is enabled on the tenant and that the `AZUREADSSOACC$` account still exists in the domain. On Okta, the error line names the SPN it asked for: check that Agentless Desktop SSO is enabled for the org, and that `--okta-org` and `--okta-domain` spell the host the way Okta does.
+
+Two more exit 5 errors: `KDC_ERR_PREAUTH_FAILED` means the KDC rejected the password, hash, or AES key for this user, and `KDC_ERR_WRONG_REALM` means `--domain` is not the realm the ticket was issued in.
 
 ## Acknowledgments
 

@@ -201,3 +201,5 @@ Two more exit 5 errors: `KDC_ERR_PREAUTH_FAILED` means the KDC rejected the pass
 ## Acknowledgments
 
 Inspired by [SeamlessPass](https://github.com/Malcrove/SeamlessPass) by Malcrove, which does the Seamless SSO flow as a CLI tool and gives you OAuth tokens. This project takes the same idea but wires it into a browser session instead, so you land directly in Outlook, SharePoint, or whatever else the target has access to.
+
+The Okta Agentless Desktop SSO support stems from TrustedSec's [Okta for Red Teamers](https://trustedsec.com/blog/okta-for-red-teamers), which works out the Kerberos IWA flow against Okta's tenant SPN.
